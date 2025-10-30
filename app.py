@@ -1,64 +1,37 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import altair as alt
+import json
+from datetime import datetime
+from streamlit.web.server.websocket_headers import _get_websocket_headers
 
 st.set_page_config(page_title="AI Pricing Dashboard", layout="wide")
 
-st.title("💷 AI Pricing Dashboard")
-st.write("An intelligent tool to visualize and adjust Airbnb or rental pricing dynamically.")
+st.title("💷 AI Pricing Agent Dashboard (Live Updates via n8n)")
 
-# Sidebar Inputs
-st.sidebar.header("📊 Pricing Configuration")
-base_price = st.sidebar.number_input("Base Price per Night (£)", min_value=50, max_value=500, value=120)
-min_price = st.sidebar.number_input("Minimum Price (£)", min_value=50, max_value=base_price, value=90)
+# Load or create empty DataFrame
+if "data" not in st.session_state:
+    st.session_state["data"] = pd.DataFrame(columns=["Date", "Occupancy", "Recommended Price (£)"])
 
-weekend_adj = st.sidebar.slider("Weekend Adjustment (%)", 0, 50, 20)
-event_adj = st.sidebar.slider("Local Event Adjustment (%)", 0, 50, 30)
-holiday_adj = st.sidebar.slider("Holiday Adjustment (%)", 0, 50, 20)
+# Webhook listener
+headers = _get_websocket_headers()
+if headers and "x-streamlit-webhook" in headers:
+    payload = json.loads(headers["x-streamlit-webhook"])
+    new_row = pd.DataFrame([payload])
+    st.session_state["data"] = pd.concat([st.session_state["data"], new_row], ignore_index=True)
 
-# Date Range
-dates = pd.date_range("2024-11-01", "2024-11-20")
-price_data = []
-
-for date in dates:
-    day_type = "Weekday"
-    price = base_price
-
-    if date.day_name() in ["Saturday", "Sunday"]:
-        price += base_price * (weekend_adj / 100)
-        day_type = "Weekend"
-    elif date.day in [5, 12, 19]:
-        price += base_price * (event_adj / 100)
-        day_type = "Local Event"
-    elif date.day in [8, 15]:
-        price += base_price * (holiday_adj / 100)
-        day_type = "Holiday"
-
-    price = max(price, min_price)
-    price_data.append([date.date(), day_type, round(price, 2)])
-
-df = pd.DataFrame(price_data, columns=["Date", "Type", "Suggested Price (£)"])
-
-# Color-coding visualization
-st.subheader("📅 Price Calendar")
-def highlight_type(row):
-    color = {
-        "Weekend": "background-color: #FFD580",
-        "Local Event": "background-color: #FFB6C1",
-        "Holiday": "background-color: #90EE90"
-    }.get(row["Type"], "")
-    return [color] * len(row)
-
-st.dataframe(df.style.apply(highlight_type, axis=1), height=450)
-
-# Summary Stats
-avg_price = df["Suggested Price (£)"].mean()
-max_price = df["Suggested Price (£)"].max()
-min_price = df["Suggested Price (£)"].min()
-
-st.markdown("---")
-st.subheader("📈 Summary")
-col1, col2, col3 = st.columns(3)
-col1.metric("Average Price", f"£{avg_price:.2f}")
-col2.metric("Max Price", f"£{max_price:.2f}")
-col3.metric("Min Price", f"£{min_price:.2f}")
+# Display chart
+df = st.session_state["data"]
+if not df.empty:
+    chart = alt.Chart(df).mark_bar().encode(
+        x="Date",
+        y="Recommended Price (£)",
+        color=alt.condition(
+            alt.datum.Occupancy > 80, alt.value("#16a34a"), alt.value("#dc2626")
+        ),
+        tooltip=["Date", "Recommended Price (£)", "Occupancy"]
+    )
+    st.altair_chart(chart, use_container_width=True)
+    st.dataframe(df)
+else:
+    st.info("Waiting for live data from n8n webhook...")
